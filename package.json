@@ -1,0 +1,44 @@
+{
+  "name": "obsidian-epub-importer",
+  "version": "1.0.0",
+  "description": "Import EPUB ebooks into Obsidian as one Markdown note or a folder of chapter notes.",
+  "private": true,
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ianmoran11/obsidian-ebook.git"
+  },
+  "homepage": "https://github.com/ianmoran11/obsidian-ebook#readme",
+  "bugs": {
+    "url": "https://github.com/ianmoran11/obsidian-ebook/issues"
+  },
+  "scripts": {
+    "dev": "node esbuild.config.mjs",
+    "typecheck": "tsc --noEmit",
+    "build": "npm run typecheck && node esbuild.config.mjs production",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "check:release": "node scripts/check-release.mjs",
+    "release": "npm run check:release && npm run build && node scripts/package.mjs",
+    "sample": "node scripts/create-sample.mjs"
+  },
+  "license": "MIT",
+  "engines": {
+    "node": "^22.13.0 || >=24.0.0"
+  },
+  "dependencies": {
+    "fflate": "^0.8.3",
+    "turndown": "^7.2.4",
+    "turndown-plugin-gfm": "^1.0.2"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.2",
+    "@types/turndown": "^5.0.6",
+    "esbuild": "^0.28.2",
+    "jsdom": "^29.1.1",
+    "obsidian": "^1.14.4",
+    "typescript": "^7.0.2",
+    "vite": "^7.3.7",
+    "vitest": "^5.0.5"
+  }
+}
