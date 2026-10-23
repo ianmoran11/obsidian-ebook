@@ -18,7 +18,17 @@ async function openPlugin() {
 function chooseFile(modal: Modal, name = "sample.epub", read?: () => Promise<ArrayBuffer>): void {
   const bytes = makeEpub();
   const input = modal.contentEl.querySelector<HTMLInputElement>('input[type="file"]')!;
-  const source = { name, size: bytes.byteLength, arrayBuffer: read ?? (async () => Uint8Array.from(bytes).buffer) };
+  const source = new File([Uint8Array.from(bytes).buffer], name, { type: "application/epub+zip" });
+  if (read) {
+    vi.spyOn(FileReader.prototype, "readAsArrayBuffer").mockImplementation(function (this: FileReader) {
+      Object.defineProperty(this, "readyState", { configurable: true, value: FileReader.LOADING });
+      void read().then(buffer => {
+        if (!this.onload) return;
+        Object.defineProperty(this, "result", { configurable: true, value: buffer });
+        this.dispatchEvent(new ProgressEvent("load"));
+      }, () => this.dispatchEvent(new ProgressEvent("error")));
+    });
+  }
   Object.defineProperty(input, "files", { configurable: true, value: [source] });
   input.dispatchEvent(new Event("change"));
 }
@@ -88,9 +98,45 @@ describe("plugin and import dialog", () => {
     submit(modal);
     await vi.waitFor(() => expect(read).toHaveBeenCalled());
     modal.close();
-    resolveRead(Uint8Array.from(makeEpub()).buffer);
+    // Cancellation must release the lock even before a phone's file provider responds.
     await vi.waitFor(() => expect(plugin.importController).toBeUndefined());
     expect(app.contents.size).toBe(0);
     expect(Notice.messages.join()).toContain("cancelled");
+    resolveRead(Uint8Array.from(makeEpub()).buffer);
+  });
+
+  it("shows immediate feedback and does not depend on the button's setText extension", async () => {
+    const { app, modal } = await openPlugin();
+    chooseFile(modal);
+    const cancel = Array.from(modal.contentEl.querySelectorAll("button")).find(button => button.textContent === "Cancel")!;
+    Object.defineProperty(cancel, "setText", { value: undefined });
+    submit(modal);
+    expect(Notice.messages.join()).toContain("Importing “sample.epub”…");
+    expect(modal.contentEl.querySelector('[role="status"]')?.textContent).toContain("Reading EPUB file");
+    await vi.waitFor(() => expect(app.contents.has("Books/A Test Book.md")).toBe(true));
+  });
+
+  it("does not block a book import on a stalled preferences write", async () => {
+    const { app, plugin, modal } = await openPlugin();
+    vi.spyOn(plugin, "saveSettings").mockImplementation(() => new Promise(() => {}));
+    chooseFile(modal);
+    submit(modal);
+    await vi.waitFor(() => expect(app.contents.has("Books/A Test Book.md")).toBe(true));
+    expect(Notice.messages.some(message => message.startsWith("Imported"))).toBe(true);
+    expect(plugin.importController).toBeUndefined();
+  });
+
+  it("shows a readable error when the Android file provider cannot read the file", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const { app, plugin, modal } = await openPlugin();
+    vi.spyOn(FileReader.prototype, "readAsArrayBuffer").mockImplementation(function (this: FileReader) {
+      this.dispatchEvent(new ProgressEvent("error"));
+    });
+    chooseFile(modal);
+    submit(modal);
+    await vi.waitFor(() => expect(modal.contentEl.querySelector('[role="alert"]')?.textContent).toContain("save it to Downloads"));
+    expect(app.contents.size).toBe(0);
+    expect(plugin.importController).toBeUndefined();
+    expect(Notice.messages.join()).toContain("EPUB import failed");
   });
 });

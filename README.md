@@ -23,7 +23,7 @@ Use a current BRAT version (release-asset installation requires BRAT 1.1.0+). BR
 
 ### Manual installation
 
-Download `epub-importer-1.0.0.zip` from the [latest release](https://github.com/ianmoran11/obsidian-ebook/releases/latest), or build it locally with `npm run release` (`dist/epub-importer-1.0.0.zip`).
+Download `epub-importer-1.0.1.zip` from the [latest release](https://github.com/ianmoran11/obsidian-ebook/releases/latest), or build it locally with `npm run release` (`dist/epub-importer-1.0.1.zip`).
 
 1. Extract the archive. It contains an `epub-importer` folder.
 2. Copy that folder into `<your-vault>/.obsidian/plugins/`.
@@ -103,6 +103,14 @@ To limit memory use, EPUB files are capped at **100 MB compressed**, **32 MB per
 
 **Settings → EPUB Importer** provides defaults for the destination folder, chapter layout, and whether to open the book after importing. The dialog can override the destination and layout for each import; successful validation saves these choices as the new defaults.
 
+## Android import troubleshooting
+
+Use BRAT to update to **1.0.1 or newer**. ZIP extraction no longer depends on Blob Web Workers, which can be blocked by mobile WebViews. It streams the archive with progress updates and yields to keep the UI responsive while unpacking.
+
+After tapping **Import book**, you should immediately see an importing notice, then **Reading EPUB file…** and **Unpacking EPUB…** progress. File reads are cancellable and time out after 60 seconds instead of leaving the import stuck forever. A stalled preferences write does not block the import.
+
+If a file cannot be read, first save/download the EPUB to the phone’s **Downloads** folder and select that local copy instead of a cloud-provider placeholder. If the issue continues, report the last visible status, Obsidian version, and file size (and a reproducible EPUB if you can share one).
+
 ## Development
 
 Use Node.js **22.13+ (22.x)** or **24+** and npm. The build toolchain runs on your computer; Node.js is not required inside Obsidian.
@@ -128,8 +136,8 @@ The repository-root `manifest.json` and `versions.json` are committed, but compi
 4. Create and push a matching tag **without a `v` prefix**, for example:
 
    ```sh
-   git tag 1.0.1
-   git push origin 1.0.1
+   git tag 1.0.2
+   git push origin 1.0.2
    ```
 
 `.github/workflows/release.yml` validates the tag against the manifests, installs dependencies, runs tests, builds the plugin, then publishes a GitHub release with the tag as its title. It uses the repository’s automatic `GITHUB_TOKEN`; no personal token or extra secret is needed. GitHub Actions must be enabled for the repository.
@@ -144,12 +152,13 @@ See the [BRAT developer guide](https://github.com/TfTHacker/obsidian42-brat/blob
 
 - `src/epub.ts` — bounded ZIP extraction, EPUB package/metadata/spine/navigation parsing.
 - `src/dom.ts` — inert HTML processing and SVG sanitization.
+- `src/file-reader.ts` — Android-compatible file reading, cancellation, and timeouts.
 - `src/markdown.ts` — output planning, conversion, assets, and link rewriting.
 - `src/importer.ts` — non-overwriting vault writes and rollback.
 - `src/main.ts` — Obsidian command, ribbon, context menu, dialog, and settings.
 - `tests/` — generated EPUB fixtures, in-memory vault, and an Obsidian API stand-in for dialog tests.
 
-Automated tests exercise the real parsing, conversion, write orchestration, and dialog logic. The Obsidian host is mocked in dialog tests; these tests do not substitute for testing in real desktop/iOS/Android Obsidian installations.
+Automated tests exercise the real parsing, conversion, write orchestration, and dialog logic. Browser-build regressions simulate missing/blocked Web Workers, and FileReader tests cover mobile read failures, cancellation, and timeouts. The Obsidian host is mocked in dialog tests; these tests do not substitute for testing in real desktop/iOS/Android Obsidian installations.
 
 ### Manual acceptance checklist
 

@@ -1,6 +1,6 @@
 {
   "name": "obsidian-epub-importer",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Import EPUB ebooks into Obsidian as one Markdown note or a folder of chapter notes.",
   "private": true,
   "type": "module",

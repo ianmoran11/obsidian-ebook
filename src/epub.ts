@@ -1,7 +1,7 @@
-import { unzip, unzipSync, type Unzipped } from "fflate";
+import { Unzip, UnzipInflate, unzipSync, type Unzipped } from "fflate";
 import { elements, inertHtml, parseXml, plainText, sanitizeSvg } from "./dom";
 import { decodeReference, normalizeArchivePath, resolveReference } from "./paths";
-import { checkCancelled, type EpubBook, type EpubChapter, type EpubImage } from "./types";
+import { checkCancelled, type EpubBook, type EpubChapter, type EpubImage, type Progress } from "./types";
 
 export const MAX_EPUB_BYTES = 100 * 1024 * 1024;
 const MAX_ENTRY_BYTES = 32 * 1024 * 1024;
@@ -26,7 +26,7 @@ function decode(data: Uint8Array): string {
   catch { throw new Error(`The EPUB uses an unsupported text encoding: ${encoding}.`); }
 }
 
-async function readArchive(data: Uint8Array, signal?: AbortSignal): Promise<Unzipped> {
+async function readArchive(data: Uint8Array, signal?: AbortSignal, progress?: Progress): Promise<Unzipped> {
   checkCancelled(signal);
   if (data.length > MAX_EPUB_BYTES) throw new Error("This EPUB is too large. The limit is 100 MB.");
   if (data.length < 22 || data[0] !== 0x50 || data[1] !== 0x4b) {
@@ -34,7 +34,7 @@ async function readArchive(data: Uint8Array, signal?: AbortSignal): Promise<Unzi
   }
   let count = 0;
   let total = 0;
-  const names = new Set<string>();
+  const entries = new Map<string, { originalSize: number; compression: number }>();
   try {
     // Inspect the complete ZIP directory BEFORE allocating decompressed buffers.
     unzipSync(data, { filter: file => {
@@ -46,12 +46,15 @@ async function readArchive(data: Uint8Array, signal?: AbortSignal): Promise<Unzi
       if (file.compression === 0 && file.size !== file.originalSize) {
         throw new Error("The EPUB has inconsistent ZIP entry sizes.");
       }
+      if (file.compression !== 0 && file.compression !== 8) {
+        throw new Error("The EPUB uses unsupported ZIP compression.");
+      }
       const path = file.name.replace(/\/$/, "");
       if (path !== normalizeArchivePath(path) || path.split("/").some(part => part === "..") ||
-          Object.prototype.hasOwnProperty.call(Object.prototype, path) || names.has(file.name)) {
+          Object.prototype.hasOwnProperty.call(Object.prototype, path) || entries.has(file.name)) {
         throw new Error("The EPUB contains unsafe or duplicate resource paths.");
       }
-      names.add(file.name);
+      entries.set(file.name, { originalSize: file.originalSize, compression: file.compression });
       return false;
     } });
   } catch (error) {
@@ -59,29 +62,65 @@ async function readArchive(data: Uint8Array, signal?: AbortSignal): Promise<Unzi
     throw new Error("The EPUB ZIP archive is damaged or unsupported.");
   }
 
-  return new Promise((resolve, reject) => {
-    let stop: (() => void) | undefined;
-    const abort = () => {
-      signal?.removeEventListener("abort", abort);
-      stop?.();
-      const error = new Error("Import cancelled.");
-      error.name = "AbortError";
-      reject(error);
-    };
-    signal?.addEventListener("abort", abort, { once: true });
-    try {
-      stop = unzip(data, { filter: file => !file.name.endsWith("/") }, (error, files) => {
-        signal?.removeEventListener("abort", abort);
-        if (signal?.aborted) abort();
-        else if (error) reject(new Error("Could not extract this EPUB. It may be damaged, encrypted, or use unsupported ZIP compression."));
-        else resolve(files);
-      });
-    } catch {
-      signal?.removeEventListener("abort", abort);
-      stop?.();
-      reject(new Error("Could not extract this EPUB."));
+  // Do not use fflate's async unzip(): large entries create Blob Web Workers.
+  // Android WebViews can block their startup without notifying fflate, leaving
+  // its callback pending forever. Stream on this thread and yield between chunks.
+  const archive: Unzipped = Object.create(null);
+  const started = new Set<string>();
+  let failure: Error | undefined;
+  const invalid = () => new Error("The EPUB ZIP archive is damaged, encrypted, or has inconsistent entry sizes.");
+  const stream = new Unzip(file => {
+    if (failure) return;
+    const expected = entries.get(file.name);
+    if (!expected || started.has(file.name) || file.compression !== expected.compression) {
+      failure = invalid();
+      return;
     }
+    started.add(file.name);
+    if (file.name.endsWith("/")) return;
+    const result = new Uint8Array(expected.originalSize);
+    let written = 0;
+    file.ondata = (error, chunk, final) => {
+      if (failure) return;
+      if (error || written + chunk.length > result.length) {
+        failure = invalid();
+        return;
+      }
+      result.set(chunk, written);
+      written += chunk.length;
+      if (final) {
+        if (written !== result.length) failure = invalid();
+        else archive[file.name] = result;
+      }
+    };
+    file.start();
   });
+  stream.register(UnzipInflate);
+  progress?.("Unpacking EPUB… 0%");
+  await new Promise<void>(resolve => setTimeout(resolve, 0));
+  let lastYield = Date.now();
+  try {
+    const chunkSize = 64 * 1024;
+    for (let offset = 0; offset < data.length; offset += chunkSize) {
+      checkCancelled(signal);
+      const end = Math.min(offset + chunkSize, data.length);
+      stream.push(data.subarray(offset, end), end === data.length);
+      if (failure) throw failure;
+      if (Date.now() - lastYield >= 8 || end === data.length) {
+        progress?.(`Unpacking EPUB… ${Math.round(end / data.length * 100)}%`);
+        await new Promise<void>(resolve => setTimeout(resolve, 0));
+        lastYield = Date.now();
+      }
+    }
+    checkCancelled(signal);
+    for (const name of entries.keys()) {
+      if (!name.endsWith("/") && !Object.prototype.hasOwnProperty.call(archive, name)) throw invalid();
+    }
+    return archive;
+  } catch (error) {
+    if (error instanceof Error && (error.name === "AbortError" || /EPUB/.test(error.message))) throw error;
+    throw invalid();
+  }
 }
 
 interface ManifestItem {
@@ -121,9 +160,9 @@ function navigationTitles(archive: Unzipped, items: ManifestItem[], spineToc: st
 }
 
 export async function parseEpub(
-  bytes: ArrayBuffer | Uint8Array, sourceName: string, signal?: AbortSignal,
+  bytes: ArrayBuffer | Uint8Array, sourceName: string, signal?: AbortSignal, progress?: Progress,
 ): Promise<EpubBook> {
-  const archive = await readArchive(bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes), signal);
+  const archive = await readArchive(bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes), signal, progress);
   checkCancelled(signal);
   const read = (path: string): string => {
     const data = archive[path];

@@ -1,5 +1,6 @@
 import { App, Modal, Notice, Plugin, PluginSettingTab, Setting, TFile, TFolder, type TAbstractFile, type Vault } from "obsidian";
 import { MAX_EPUB_BYTES, parseEpub } from "./epub";
+import { readEpubFile, readSourceBytes } from "./file-reader";
 import { writeImportPlan } from "./importer";
 import { createImportPlan } from "./markdown";
 import { destinationPath } from "./paths";
@@ -18,7 +19,7 @@ const DEFAULT_SETTINGS: ImporterSettings = {
 interface EpubSource {
   name: string;
   size: number;
-  read(): Promise<ArrayBuffer>;
+  read(signal?: AbortSignal): Promise<ArrayBuffer>;
 }
 
 function vaultAccess(vault: Vault): VaultAccess {
@@ -168,7 +169,7 @@ class ImportModal extends Modal {
     });
     fileInput.addEventListener("change", () => {
       const file = fileInput.files?.[0];
-      this.source = file ? { name: file.name, size: file.size, read: () => file.arrayBuffer() } : undefined;
+      this.source = file ? { name: file.name, size: file.size, read: signal => readEpubFile(file, signal) } : undefined;
       sourceLabel.setText(this.source?.name ?? "No ebook selected.");
       importButton.disabled = !this.source;
       errorEl.empty();
@@ -178,22 +179,25 @@ class ImportModal extends Modal {
       importButton.disabled = busy || !this.source;
       fileInput.disabled = modeControl.disabled = destinationControl.disabled = busy;
       cancelButton.disabled = false;
-      cancelButton.setText(busy ? "Cancel import" : "Cancel");
+      cancelButton.textContent = busy ? "Cancel import" : "Cancel";
       contentEl.setAttribute("aria-busy", String(busy));
     };
     const run = async () => {
-      if (!this.source) return;
+      const source = this.source;
+      if (!source) return;
       if (this.plugin.importController) {
         errorEl.setText("Another EPUB import is already running.");
         return;
       }
-      errorEl.empty();
       const controller = new AbortController();
       this.controller = this.plugin.importController = controller;
-      setBusy(true);
       try {
-        if (!/\.epub$/i.test(this.source.name)) throw new Error("Please choose a file ending in .epub.");
-        if (this.source.size > MAX_EPUB_BYTES) throw new Error("This EPUB is too large. The limit is 100 MB.");
+        errorEl.empty();
+        setBusy(true);
+        status.setText("Starting EPUB import…");
+        new Notice(`Importing “${source.name}”…`, 5000);
+        if (!/\.epub$/i.test(source.name)) throw new Error("Please choose a file ending in .epub.");
+        if (source.size > MAX_EPUB_BYTES) throw new Error("This EPUB is too large. The limit is 100 MB.");
         const folder = destinationPath(destination);
         const access = vaultAccess(this.app.vault);
         for (let current = folder; current; current = current.slice(0, Math.max(0, current.lastIndexOf("/")))) {
@@ -201,12 +205,16 @@ class ImportModal extends Modal {
         }
         this.plugin.settings.mode = mode;
         this.plugin.settings.destination = folder;
-        await this.plugin.saveSettings();
-        status.setText("Reading and unpacking EPUB…");
+        // A stalled mobile preferences write must not prevent importing a book.
+        void this.plugin.saveSettings().catch(error => {
+          console.warn("EPUB Importer: could not save preferences", error);
+          new Notice("Import will continue, but importer preferences could not be saved.");
+        });
+        status.setText("Reading EPUB file…");
         await new Promise<void>(resolve => window.setTimeout(resolve, 0));
         checkCancelled(controller.signal);
-        const bytes = await this.source.read();
-        const book = await parseEpub(bytes, this.source.name, controller.signal);
+        const bytes = await readSourceBytes(() => source.read(controller.signal), controller.signal);
+        const book = await parseEpub(bytes, source.name, controller.signal, message => status.setText(message));
         checkCancelled(controller.signal);
         status.setText(`Converting ${book.chapters.length} chapters to Markdown…`);
         await new Promise<void>(resolve => window.setTimeout(resolve, 0));

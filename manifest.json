@@ -1,7 +1,7 @@
 {
   "id": "epub-importer",
   "name": "EPUB Importer",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "minAppVersion": "1.5.0",
   "description": "Turn EPUB ebooks into one Markdown note or a linked folder of chapter notes, with local images.",
   "author": "EPUB Importer contributors",

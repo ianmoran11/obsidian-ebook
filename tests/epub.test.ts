@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { strToU8, zipSync } from "fflate";
+import { strToU8, zipSync, Zip, ZipDeflate, ZipPassThrough } from "fflate";
 import { parseEpub } from "../src/epub";
-import { COVER, makeEpub, PACKAGE } from "./fixtures";
+import { COVER, epubEntries, makeEpub, PACKAGE } from "./fixtures";
 
 const noNav = PACKAGE.replace(/<item id="nav"[^>]+\/>/, "");
 const noToc = noNav.replace(/<item id="ncx"[^>]+\/>/, "");
@@ -23,6 +23,61 @@ describe("EPUB parsing", () => {
     const extracted = book.images[0]!.data;
     expect(extracted.byteLength).toBe(image.byteLength);
     expect(extracted.every((value, index) => value === image[index])).toBe(true);
+  });
+
+  it("supports streaming ZIP entries with data descriptors", async () => {
+    const chunks: Uint8Array[] = [];
+    const zip = new Zip((error, chunk) => {
+      if (error) throw error;
+      chunks.push(chunk);
+    });
+    for (const [name, value] of Object.entries(epubEntries())) {
+      const entry = name === "mimetype" ? new ZipPassThrough(name) : new ZipDeflate(name, { level: 6 });
+      zip.add(entry);
+      entry.push(typeof value === "string" ? strToU8(value) : value, true);
+    }
+    zip.end();
+    const bytes = new Uint8Array(chunks.reduce((size, chunk) => size + chunk.length, 0));
+    let offset = 0;
+    for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.length; }
+    const book = await parseEpub(bytes, "streamed.epub");
+    expect(book.chapters).toHaveLength(2);
+    expect(Array.from(book.images[0]!.data)).toEqual(Array.from(COVER));
+  });
+
+  it("reports unpacking progress and honors cancellation during extraction", async () => {
+    const messages: string[] = [];
+    await parseEpub(makeEpub(), "sample.epub", undefined, message => messages.push(message));
+    expect(messages[0]).toBe("Unpacking EPUB… 0%");
+    expect(messages.at(-1)).toBe("Unpacking EPUB… 100%");
+    const controller = new AbortController();
+    await expect(parseEpub(makeEpub(), "sample.epub", controller.signal, message => {
+      if (message.endsWith("100%")) controller.abort();
+    })).rejects.toMatchObject({ name: "AbortError" });
+  });
+
+  it("rejects mismatched local and central ZIP names", async () => {
+    const bytes = makeEpub();
+    bytes[30] = 120; // Rename only the local header's first filename (mimetype).
+    await expect(parseEpub(bytes, "damaged.epub")).rejects.toThrow(/damaged/);
+  });
+
+  it("checks actual decompressed sizes against the preflighted limits", async () => {
+    const bytes = makeEpub({}, 6);
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    let changed = false;
+    for (let i = 0; i < bytes.length - 46; i++) {
+      if (view.getUint32(i, true) !== 0x02014b50) continue;
+      const length = view.getUint16(i + 28, true);
+      const name = new TextDecoder().decode(bytes.subarray(i + 46, i + 46 + length));
+      if (name === "OEBPS/images/cover.png") {
+        view.setUint32(i + 24, COVER.length - 1, true);
+        changed = true;
+        break;
+      }
+    }
+    expect(changed).toBe(true);
+    await expect(parseEpub(bytes, "damaged.epub")).rejects.toThrow(/inconsistent entry sizes/);
   });
 
   it("uses spine order rather than manifest order or filenames", async () => {
