@@ -23,7 +23,7 @@ Use a current BRAT version (release-asset installation requires BRAT 1.1.0+). BR
 
 ### Manual installation
 
-Download `epub-importer-1.0.1.zip` from the [latest release](https://github.com/ianmoran11/obsidian-ebook/releases/latest), or build it locally with `npm run release` (`dist/epub-importer-1.0.1.zip`).
+Download `epub-importer-1.0.2.zip` from the [latest release](https://github.com/ianmoran11/obsidian-ebook/releases/latest), or build it locally with `npm run release` (`dist/epub-importer-1.0.2.zip`).
 
 1. Extract the archive. It contains an `epub-importer` folder.
 2. Copy that folder into `<your-vault>/.obsidian/plugins/`.
@@ -105,7 +105,9 @@ To limit memory use, EPUB files are capped at **100 MB compressed**, **32 MB per
 
 ## Android import troubleshooting
 
-Use BRAT to update to **1.0.1 or newer**. ZIP extraction no longer depends on Blob Web Workers, which can be blocked by mobile WebViews. It streams the archive with progress updates and yields to keep the UI responsive while unpacking.
+Use BRAT to update to **1.0.2 or newer**. Version 1.0.2 fixes a button-state bug that made **Import book** look enabled while Obsidian still ignored clicks after file selection. The importer now updates Obsidian’s button component state, not just its HTML button.
+
+ZIP extraction also avoids Blob Web Workers, which can be blocked by mobile WebViews. It streams the archive with progress updates and yields to keep the UI responsive while unpacking.
 
 After tapping **Import book**, you should immediately see an importing notice, then **Reading EPUB file…** and **Unpacking EPUB…** progress. File reads are cancellable and time out after 60 seconds instead of leaving the import stuck forever. A stalled preferences write does not block the import.
 
@@ -136,8 +138,8 @@ The repository-root `manifest.json` and `versions.json` are committed, but compi
 4. Create and push a matching tag **without a `v` prefix**, for example:
 
    ```sh
-   git tag 1.0.2
-   git push origin 1.0.2
+   git tag 1.0.3
+   git push origin 1.0.3
    ```
 
 `.github/workflows/release.yml` validates the tag against the manifests, installs dependencies, runs tests, builds the plugin, then publishes a GitHub release with the tag as its title. It uses the repository’s automatic `GITHUB_TOKEN`; no personal token or extra secret is needed. GitHub Actions must be enabled for the repository.
@@ -158,15 +160,17 @@ See the [BRAT developer guide](https://github.com/TfTHacker/obsidian42-brat/blob
 - `src/main.ts` — Obsidian command, ribbon, context menu, dialog, and settings.
 - `tests/` — generated EPUB fixtures, in-memory vault, and an Obsidian API stand-in for dialog tests.
 
-Automated tests exercise the real parsing, conversion, write orchestration, and dialog logic. Browser-build regressions simulate missing/blocked Web Workers, and FileReader tests cover mobile read failures, cancellation, and timeouts. The Obsidian host is mocked in dialog tests; these tests do not substitute for testing in real desktop/iOS/Android Obsidian installations.
+Automated tests exercise the real parsing, conversion, write orchestration, and dialog logic. Browser-build regressions simulate missing/blocked Web Workers, and FileReader tests cover mobile read failures, cancellation, and timeouts. The dialog stand-in models Obsidian’s independent `ButtonComponent.disabled` flag: updating only the DOM attribute must not enable callbacks.
+
+Version 1.0.2 was also tested in actual desktop Obsidian 1.14.4 with a multi-megabyte EPUB in both layouts. This exercised the real import dialog’s file-change and button handlers, Obsidian’s vault writes, and the resulting notes, images, and link targets. The private input book is not included in the repository. Native Android/iOS file-provider testing still requires those devices; automated host stand-ins are not a substitute.
 
 ### Manual acceptance checklist
 
 On each target device, use a disposable vault:
 
 1. Install from `ianmoran11/obsidian-ebook` through BRAT and enable the plugin. Confirm the import command and ribbon icon appear.
-2. Import the sample EPUB in **one-note** mode; confirm chapter order, contents links, formatting, and the image.
-3. Import it in **separate-notes** mode; confirm the index, chapter links, and previous/next navigation.
+2. Open the import command with **no preselected file**, choose the sample EPUB through the file picker, and click **Import book** in **one-note** mode. Confirm the button actually starts the operation, then check chapter order, contents links, formatting, and the image.
+3. Repeat file selection in **separate-notes** mode; confirm the index, chapter links, and previous/next navigation. Also clear and reselect the file to check that the button component is re-enabled.
 4. Import again; confirm a suffixed name is used and the earlier import is unchanged.
 5. Change defaults, reload Obsidian, and confirm they persist.
 6. Try a damaged EPUB and an invalid destination; verify a useful error and no new book files.

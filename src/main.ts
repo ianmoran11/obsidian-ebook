@@ -1,4 +1,4 @@
-import { App, Modal, Notice, Plugin, PluginSettingTab, Setting, TFile, TFolder, type TAbstractFile, type Vault } from "obsidian";
+import { App, Modal, Notice, Plugin, PluginSettingTab, Setting, TFile, TFolder, type ButtonComponent, type TAbstractFile, type Vault } from "obsidian";
 import { MAX_EPUB_BYTES, parseEpub } from "./epub";
 import { readEpubFile, readSourceBytes } from "./file-reader";
 import { writeImportPlan } from "./importer";
@@ -151,35 +151,36 @@ class ImportModal extends Modal {
       cls: "epub-importer-error", attr: { role: "alert" },
     });
     const buttons = new Setting(contentEl).setClass("epub-importer-actions");
-    let cancelButton!: HTMLButtonElement;
-    let importButton!: HTMLButtonElement;
+    let cancelButton!: ButtonComponent;
+    let importButton!: ButtonComponent;
     buttons.addButton(button => {
-      cancelButton = button.buttonEl;
+      cancelButton = button;
       button.setButtonText("Cancel").onClick(() => {
         if (this.controller) {
           this.controller.abort();
-          cancelButton.disabled = true;
+          cancelButton.setDisabled(true);
           status.setText("Cancelling and removing incomplete files…");
         } else this.close();
       });
     });
     buttons.addButton(button => {
-      importButton = button.buttonEl;
+      importButton = button;
       button.setButtonText("Import book").setCta().setDisabled(!this.source).onClick(() => { void run(); });
     });
     fileInput.addEventListener("change", () => {
       const file = fileInput.files?.[0];
       this.source = file ? { name: file.name, size: file.size, read: signal => readEpubFile(file, signal) } : undefined;
       sourceLabel.setText(this.source?.name ?? "No ebook selected.");
-      importButton.disabled = !this.source;
+      // Obsidian also checks ButtonComponent.disabled before calling onClick.
+      // Changing only buttonEl.disabled makes it look enabled but ignores clicks.
+      importButton.setDisabled(!this.source);
       errorEl.empty();
     });
 
     const setBusy = (busy: boolean) => {
-      importButton.disabled = busy || !this.source;
+      importButton.setDisabled(busy || !this.source);
       fileInput.disabled = modeControl.disabled = destinationControl.disabled = busy;
-      cancelButton.disabled = false;
-      cancelButton.textContent = busy ? "Cancel import" : "Cancel";
+      cancelButton.setDisabled(false).setButtonText(busy ? "Cancel import" : "Cancel");
       contentEl.setAttribute("aria-busy", String(busy));
     };
     const run = async () => {

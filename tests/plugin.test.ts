@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { App, PluginManifest } from "obsidian";
 import EpubImporterPlugin from "../src/main";
-import { Modal, Notice, Plugin as MockPlugin, mockApp } from "./obsidian-mock";
+import { Modal, Notice, Plugin as MockPlugin, Setting as MockSetting, mockApp } from "./obsidian-mock";
 import { makeEpub } from "./fixtures";
 
 const manifest = { id: "epub-importer", name: "EPUB Importer", version: "1.0.0", minAppVersion: "1.5.0", author: "Contributors", description: "Test" } satisfies PluginManifest;
@@ -43,6 +43,19 @@ beforeEach(() => { Notice.messages = []; document.body.replaceChildren(); });
 afterEach(() => { Modal.latest?.close(); vi.restoreAllMocks(); });
 
 describe("plugin and import dialog", () => {
+  it("models Obsidian's separate component-disabled click guard", () => {
+    let clicks = 0;
+    new MockSetting(document.body).addButton(button => {
+      button.setDisabled(true).onClick(() => { clicks++; });
+      button.buttonEl.disabled = false;
+      button.buttonEl.click();
+      expect(clicks).toBe(0);
+      button.setDisabled(false);
+      button.buttonEl.click();
+      expect(clicks).toBe(1);
+    });
+  });
+
   it("registers the command, ribbon entry, and settings tab", async () => {
     const { registered, modal } = await openPlugin();
     expect(registered.commands[0]?.id).toBe("import-epub");
@@ -77,6 +90,21 @@ describe("plugin and import dialog", () => {
     expect(plugin.importController).toBeUndefined();
     expect(plugin.settings.mode).toBe(mode);
     expect(plugin.settings.destination).toBe("Reading");
+  });
+
+  it("re-enables the component after clearing and reselecting a file", async () => {
+    const { app, modal } = await openPlugin();
+    const button = modal.contentEl.querySelector<HTMLButtonElement>(".mod-cta")!;
+    expect(button.disabled).toBe(true);
+    chooseFile(modal);
+    expect(button.disabled).toBe(false);
+    const input = modal.contentEl.querySelector<HTMLInputElement>('input[type="file"]')!;
+    Object.defineProperty(input, "files", { configurable: true, value: [] });
+    input.dispatchEvent(new Event("change"));
+    expect(button.disabled).toBe(true);
+    chooseFile(modal);
+    submit(modal);
+    await vi.waitFor(() => expect(app.contents.has("Books/A Test Book.md")).toBe(true));
   });
 
   it("shows a useful validation error without touching the vault", async () => {

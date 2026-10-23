@@ -60,11 +60,17 @@ export class Modal {
 
 class Button {
   buttonEl: HTMLButtonElement;
-  constructor(parent: HTMLElement) { this.buttonEl = parent.createEl("button"); }
+  disabled = false;
+  private clickCallback?: () => void;
+  constructor(parent: HTMLElement) {
+    this.buttonEl = parent.createEl("button");
+    // Real Obsidian checks the component flag, not just the DOM disabled attribute.
+    this.buttonEl.addEventListener("click", () => { if (!this.disabled) this.clickCallback?.(); });
+  }
   setButtonText(text: string): this { this.buttonEl.textContent = text; return this; }
-  setCta(): this { return this; }
-  setDisabled(value: boolean): this { this.buttonEl.disabled = value; return this; }
-  onClick(callback: () => void): this { this.buttonEl.addEventListener("click", callback); return this; }
+  setCta(): this { this.buttonEl.classList.add("mod-cta"); return this; }
+  setDisabled(value: boolean): this { this.disabled = value; this.buttonEl.disabled = value; return this; }
+  onClick(callback: () => void): this { this.clickCallback = callback; return this; }
 }
 class Text {
   inputEl: HTMLInputElement;
